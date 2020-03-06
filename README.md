@@ -2,7 +2,7 @@
 
 Important links:
  - Tracker issue in genetics/projects repo: https://gitlab.labmed.uw.edu/genetics/projects/issues/100
- - Current research pipeline: https://gitlab.labmed.uw.edu/genetics/projects/issues/100
+ - Current research pipeline: https://bitbucket.org/nithishak/loh-pipeline/src/master/
 
 
 ## Pipeline installation

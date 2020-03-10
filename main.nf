@@ -1,46 +1,70 @@
 #!/usr/bin/env nextflow
+def helpMessage() {
+    log.info nfcoreHeader()
+    log.info"""
+    Usage:
+    The typical command for running the pipeline is as follows:
+    nextflow run main.nf --input sample.tsv -profile docker
+""".stripIndent()
+}
+params.genome = 'GRCh37'
+params.assay = 'MONCv1'
 
-// Assay specific files
-picard_bed_file = Channel.fromPath('/mnt/disk2/com/Genomes/Picard/MONC_ctDNA1.3_designed_probe_coords_180314_no_chr.Picard.bed')
-bed_file = Channel.fromPath('/mnt/disk2/com/Genomes/BED_Files/MONC_ctDNA1.3_designed_probe_coords_180314_no_chr.bed')
+// Read in the genome fasta and index
+ref_fasta = file(params.genomes[params.genome].ref_fasta, checkIfExists: true)
+ref_fasta_fai = file(params.genomes[params.genome].ref_fasta_fai, checkIfExists: true)
 
-// Setup the various inputs, defined in nexflow.config
-fastq_pair_ch = Channel.fromFilePairs(params.input_folder + '*{1,2}.fastq.gz', flat: true) //.println { it }
+bwa_index = Channel.fromPath(params.genomes[params.genome].bwa_index, checkIfExists: true).collect()
+ref_fasta_dict = Channel.fromPath(params.genomes[params.genome].ref_fasta_dict, checkIfExists: true).collect()
+//picard_intervals = file(params.assays[params.assay].picard_intervals, checkIfExists: true)
+bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
 
-reference_fasta = Channel.fromPath("/mnt/disk2/com/Genomes/gatk-bundle/human_g1k_v37.fasta")
-reference_index = Channel.fromPath("/mnt/disk2/com/Genomes/gatk-bundle/human_g1k_v37.fasta.{amb,ann,bwt,pac,sa,dict,fai}")
-
-// Reference genome is used multiple times
-reference_fasta.into { bwa_ref; bwa_realign_ref; picard_ref; qc_ref; filter_con_ref ; vardict_ref}
-reference_index.into { bwa_ref_index; bwa_realign_ref_index; picard_ref_index; qc_ref_index; filter_con_ref_index; vardict_ref_index }
-
-//  memory "32GB"
+fastq_pair_ch = Channel.fromFilePairs('test_data/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 
 process bwa {
-  // Align fastqs
-  label 'bwa'
-  tag "${sample_id}"
-  input:
-    file(reference_fasta) from bwa_ref
-    file("*") from bwa_ref_index.collect()
-    set sample_id, file(fastq1), file(fastq2) from fastq_pair_ch
+    // Align fastqs
+    label 'bwa'
 
-  output:
-    set val(sample_id), file('*.sam') into align_ch
+    tag "${sample_id}"
 
-  publishDir params.output, overwrite: true
+    input:
+        path ref_fasta
+        path bwa_index
+        tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pair_ch
 
-  cpus 8
-  
-  script:
-  """ 
-  bwa mem \
-  -R "@RG\\tID:${sample_id}\\tSM:${sample_id}" \
-  -K 10000000 \
-  -C \
-  -Y \
-  -t ${task.cpus} \
-  ${reference_fasta} \
-  ${fastq1} ${fastq2} > ${sample_id}.sam
-  """
+    output:
+        tuple val(sample_id), file("${sample_id}.sam") into align_ch
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    // -Y use soft clipping for supplimentary alignment
+    // -K process INT input bases in each batch regardless of nThreads (for reproducibility)
+    // -C append FASTA/FASTQ comment to SAM output
+    script:
+    """ 
+    bwa mem -R "@RG\\tID:${sample_id}\\tSM:${sample_id}" -K 10000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.sam
+    """
+}
+
+process samtools {
+    label 'samtools'
+
+    tag "${sample_id}"
+
+    input:
+        tuple val(sample_id), file(sam_file) from align_ch
+
+    output:
+        tuple val(sample_id), file("${sample_id}.bam") into raw_bam
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    samtools view -h -u $sam_file | samtools sort - -o ${sample_id}.bam
+    """
 }

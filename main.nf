@@ -21,7 +21,7 @@ bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
 
 fastq_pair_ch = Channel.fromFilePairs('test_data/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 
-process bwa {
+process bwa_mem {
     // Align fastqs
     label 'bwa'
 
@@ -48,7 +48,7 @@ process bwa {
     """
 }
 
-process samtools {
+process samtools_view_sort {
     label 'samtools'
 
     tag "${sample_id}"
@@ -66,5 +66,26 @@ process samtools {
     script:
     """
     samtools view -h -u $sam_file | samtools sort - -o ${sample_id}.bam
+    """
+}
+
+process picard_remove_duplicates {
+    label 'picard'
+
+    tag "${sample_id}"
+
+    input:
+        tuple val(sample_id), file(bam_file) from raw_bam
+
+    output:
+        tuple val(sample_id), file("${sample_id}.bam") into rmdup_bam
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    java -Xmx4g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.bam METRICS_FILE=${sample_id}.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
     """
 }

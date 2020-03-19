@@ -4,7 +4,7 @@ def helpMessage() {
     log.info"""
     Usage:
     The typical command for running the pipeline is as follows:
-    nextflow run main.nf --input sample.tsv -profile docker
+    nextflow run main.nf --tumor samples/ --normal samples/ -profile docker
 """.stripIndent()
 }
 params.genome = 'GRCh37'
@@ -23,9 +23,10 @@ ref_fasta_dict = Channel.fromPath(params.genomes[params.genome].ref_fasta_dict, 
 //picard_intervals = file(params.assays[params.assay].picard_intervals, checkIfExists: true)
 bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
 
-fastq_pair_ch = Channel.fromFilePairs(params.input + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
+fastq_pairs_n = Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
+fastq_pairs_t = Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 
-process bwa_mem {
+process bwa_mem_n {
     // Align fastqs
     label 'bwa'
 
@@ -34,10 +35,37 @@ process bwa_mem {
     input:
         path ref_fasta
         path bwa_index
-        tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pair_ch
+        tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pairs_n
 
     output:
-        tuple val(sample_id), file("${sample_id}.sam") into align_ch
+        tuple val(sample_id), file("${sample_id}.normal.sam") into aligned_sams_n
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    // -Y use soft clipping for supplimentary alignment
+    // -K process INT input bases in each batch regardless of nThreads (for reproducibility)
+    // -C append FASTA/FASTQ comment to SAM output
+    script:
+    """ 
+    bwa mem -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" -K 100000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.normal.sam
+    """
+}
+
+process bwa_mem_t {
+    // Align fastqs
+    label 'bwa'
+
+    tag "${sample_id}"
+
+    input:
+        path ref_fasta
+        path bwa_index
+        tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pairs_t
+
+    output:
+        tuple val(sample_id), file("${sample_id}.tumor.sam") into aligned_sams_t
 
     cpus 16
 
@@ -48,41 +76,83 @@ process bwa_mem {
     // -C append FASTA/FASTQ comment to SAM output
     script:
     """ 
-    bwa mem -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" -K 100000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.sam
+    bwa mem -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" -K 100000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.tumor.sam
     """
 }
 
-process samtools_view_sort {
+process samtools_view_sort_n {
     label 'samtools'
 
     tag "${sample_id}"
 
     input:
-        tuple val(sample_id), file(sam_file) from align_ch
+        tuple val(sample_id), file(sam_file) from aligned_sams_n
 
     output:
-        tuple val(sample_id), file("${sample_id}.bam") into raw_bams
+        tuple val(sample_id), file("${sample_id}.raw.normal.bam") into raw_bams_n
 
     cpus 16
 
-    //publishDir params.output, overwrite: true
+    publishDir params.output, overwrite: true
 
     script:
     """
-    samtools view -hb $sam_file | samtools sort - -o ${sample_id}.bam
+    samtools view -hb $sam_file | samtools sort - -o ${sample_id}.raw.normal.bam
     """
 }
 
-process picard_remove_duplicates {
+process samtools_view_sort_t {
+    label 'samtools'
+
+    tag "${sample_id}"
+
+    input:
+        tuple val(sample_id), file(sam_file) from aligned_sams_t
+
+    output:
+        tuple val(sample_id), file("${sample_id}.raw.tumor.bam") into raw_bams_t
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    samtools view -hb $sam_file | samtools sort - -o ${sample_id}.raw.tumor.bam
+    """
+}
+
+process picard_remove_duplicates_n {
     label 'picard'
 
     tag "${sample_id}"
 
     input:
-        tuple val(sample_id), file(bam_file) from raw_bams
+        tuple val(sample_id), file(bam_file) from raw_bams_n
 
     output:
-        tuple val(sample_id), file("${sample_id}.bam") into rmdup_bams_recal, rmdup_bams
+        tuple val(sample_id), file("${sample_id}.rmdup.normal.bam") into rmdup_bams_recal_n, rmdup_bams_n
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    java -Xmx4g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.rmdup.normal.bam METRICS_FILE=${sample_id}.normal.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
+    """
+}
+
+process picard_remove_duplicates_t {
+    label 'picard'
+
+    tag "${sample_id}"
+
+    input:
+        tuple val(sample_id), file(bam_file) from raw_bams_t
+
+    output:
+        tuple val(sample_id), file("${sample_id}.rmdup.tumor.bam") into rmdup_bams_recal_t, rmdup_bams_t
 
     cpus 16
 
@@ -90,11 +160,11 @@ process picard_remove_duplicates {
 
     script:
     """
-    java -Xmx4g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.bam METRICS_FILE=${sample_id}.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
+    java -Xmx4g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.rmdup.tumor.bam METRICS_FILE=${sample_id}.tumor.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
     """
 }
 
-process gatk_bqsr {
+process gatk_bqsr_n {
     label 'gatk'
 
     tag "${sample_id}"
@@ -107,10 +177,10 @@ process gatk_bqsr {
         path gatk_mills_index
         path gatk_1kg
         path gatk_1kg_index
-        tuple val(sample_id), file(bam_file) from rmdup_bams_recal
+        tuple val(sample_id), file(bam_file) from rmdup_bams_recal_n
 
     output:
-        tuple val(sample_id), file("${sample_id}.recal_table") into bqsr_recal_tables
+        tuple val(sample_id), file("${sample_id}.normal.recal_table") into bqsr_recal_tables_n
 
     cpus 16
 
@@ -118,25 +188,27 @@ process gatk_bqsr {
 
     script:
     """
-    gatk --java-options "-Xmx4G" BaseRecalibrator --reference ${ref_fasta} --input ${bam_file} --known-sites ${gatk_mills} --known-sites ${gatk_1kg} --output ${sample_id}.recal_table 2> gatk_bqsr.log
+    gatk --java-options "-Xmx4G" BaseRecalibrator --reference ${ref_fasta} --input ${bam_file} --known-sites ${gatk_mills} --known-sites ${gatk_1kg} --output ${sample_id}.normal.recal_table
     """
 }
 
-process gatk_apply_bqsr {
+process gatk_bqsr_t {
     label 'gatk'
 
     tag "${sample_id}"
-
-    bqsr_apply = rmdup_bams.join(bqsr_recal_tables)
 
     input:
         path ref_fasta
         path ref_fasta_fai
         path ref_fasta_dict
-        tuple val(sample_id), file(bam_file), file(recal_table) from bqsr_apply
+        path gatk_mills
+        path gatk_mills_index
+        path gatk_1kg
+        path gatk_1kg_index
+        tuple val(sample_id), file(bam_file) from rmdup_bams_recal_t
 
     output:
-        tuple val(sample_id), file("${sample_id}.bqsr.bam") into bqsr_bams
+        tuple val(sample_id), file("${sample_id}.tumor.recal_table") into bqsr_recal_tables_t
 
     cpus 16
 
@@ -144,20 +216,25 @@ process gatk_apply_bqsr {
 
     script:
     """
-    gatk ApplyBQSR --reference ${ref_fasta} --input ${bam_file} --bqsr-recal-file ${recal_table} --output ${sample_id}.bqsr.bam 2> gatk_apply_bqsr.log
+    gatk --java-options "-Xmx4G" BaseRecalibrator --reference ${ref_fasta} --input ${bam_file} --known-sites ${gatk_mills} --known-sites ${gatk_1kg} --output ${sample_id}.tumor.recal_table
     """
 }
 
-process samtools_final_bam {
-    label 'samtools'
+process gatk_apply_bqsr_n {
+    label 'gatk'
 
     tag "${sample_id}"
 
+    bqsr_apply_n = rmdup_bams_n.join(bqsr_recal_tables_n)
+
     input:
-        tuple val(sample_id), file(bqsr_bam) from bqsr_bams
+        path ref_fasta
+        path ref_fasta_fai
+        path ref_fasta_dict
+        tuple val(sample_id), file(bam_file), file(recal_table) from bqsr_apply_n
 
     output:
-        tuple val(sample_id), file("${sample_id}.final.bam") into final_bams
+        tuple val(sample_id), file("${sample_id}.bqsr.normal.bam") into bqsr_bams_n
 
     cpus 16
 
@@ -165,11 +242,79 @@ process samtools_final_bam {
 
     script:
     """
-    samtools sort ${bqsr_bam} -o ${sample_id}.final.bam && samtools index ${sample_id}.final.bam
+    gatk ApplyBQSR --reference ${ref_fasta} --input ${bam_file} --bqsr-recal-file ${recal_table} --output ${sample_id}.bqsr.normal.bam
     """
 }
 
-process samtools_mpileup {
+process gatk_apply_bqsr_t {
+    label 'gatk'
+
+    tag "${sample_id}"
+
+    bqsr_apply_t = rmdup_bams_t.join(bqsr_recal_tables_t)
+
+    input:
+        path ref_fasta
+        path ref_fasta_fai
+        path ref_fasta_dict
+        tuple val(sample_id), file(bam_file), file(recal_table) from bqsr_apply_t
+
+    output:
+        tuple val(sample_id), file("${sample_id}.bqsr.tumor.bam") into bqsr_bams_t
+
+    cpus 16
+
+    //publishDir params.output, overwrite: true
+
+    script:
+    """
+    gatk ApplyBQSR --reference ${ref_fasta} --input ${bam_file} --bqsr-recal-file ${recal_table} --output ${sample_id}.bqsr.tumor.bam
+    """
+}
+
+process samtools_final_bam_n {
+    label 'samtools'
+
+    tag "${sample_id}"
+
+    input:
+        tuple val(sample_id), file(bqsr_bam) from bqsr_bams_n
+
+    output:
+        tuple val(sample_id), file("${sample_id}.normal.final.bam") into final_bams_n
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    samtools sort ${bqsr_bam} -o ${sample_id}.normal.final.bam && samtools index ${sample_id}.normal.final.bam
+    """
+}
+
+process samtools_final_bam_t {
+    label 'samtools'
+
+    tag "${sample_id}"
+
+    input:
+        tuple val(sample_id), file(bqsr_bam) from bqsr_bams_t
+
+    output:
+        tuple val(sample_id), file("${sample_id}.tumor.final.bam") into final_bams_t
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    samtools sort ${bqsr_bam} -o ${sample_id}.tumor.final.bam && samtools index ${sample_id}.tumor.final.bam
+    """
+}
+
+process samtools_mpileup_n {
     label 'samtools'
 
     tag "${sample_id}"
@@ -177,17 +322,40 @@ process samtools_mpileup {
     input:
         path ref_fasta
         path bed_file
-        tuple val(sample_id), file(final_bam) from final_bams
+        tuple val(sample_id), file(final_bam) from final_bams_n
 
     output:
-        tuple val(sample_id), file("${sample_id}.mpileup") into mpileup
+        tuple val(sample_id), file("${sample_id}.normal.mpileup") into mpileup_n
 
     cpus 16
 
     publishDir params.output, overwrite: true
 
-    shell:
-    '''
-    samtools mpileup -f !{ref_fasta} -d 1000000 -A -E -l !{bed_file} !{final_bam} 2> mpileup.log | awk '{if($4 > 0) print $0}' > !{sample_id}.mpileup || rm !{sample_id}.mpileup
-    '''
+    script:
+    """
+    samtools mpileup -f ${ref_fasta} -d 1000000 -A -E -l ${bed_file} ${final_bam} > ${sample_id}.normal.mpileup
+    """
+}
+
+process samtools_mpileup_t {
+    label 'samtools'
+
+    tag "${sample_id}"
+
+    input:
+        path ref_fasta
+        path bed_file
+        tuple val(sample_id), file(final_bam) from final_bams_t
+
+    output:
+        tuple val(sample_id), file("${sample_id}.tumor.mpileup") into mpileup_t
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    samtools mpileup -f ${ref_fasta} -d 1000000 -A -E -l ${bed_file} ${final_bam} > ${sample_id}.tumor.mpileup
+    """
 }

@@ -4,7 +4,7 @@ def helpMessage() {
     log.info"""
     Usage:
     The typical command for running the pipeline is as follows:
-    nextflow run main.nf --tumor samples/ --normal samples/ -profile docker
+    ./nextflow run main.nf --tumor samples/ --normal samples/ -gc ./hg19.gc5Base_v4.txt.gz -profile docker
 """.stripIndent()
 }
 params.genome = 'GRCh37'
@@ -23,6 +23,7 @@ ref_fasta_dict = Channel.fromPath(params.genomes[params.genome].ref_fasta_dict, 
 //picard_intervals = file(params.assays[params.assay].picard_intervals, checkIfExists: true)
 bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
 
+gc_window = file(params.gc, checkIfExists: true)
 fastq_pairs_n = Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 fastq_pairs_t = Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 
@@ -357,5 +358,56 @@ process samtools_mpileup_t {
     script:
     """
     samtools mpileup -f ${ref_fasta} -d 1000000 -A -E -l ${bed_file} ${final_bam} > ${sample_id}.tumor.mpileup
+    """
+}
+
+process sequenza_pileup2seqz {
+    label 'sequenza'
+
+    tag "${sample_id}"
+
+    //echo true
+
+    paired_mpileups = mpileup_n.join(mpileup_t)
+
+    input:
+        path gc_window
+        tuple val(sample_id), file(normal_mpileup), file(tumor_mpileup) from paired_mpileups
+
+    output:
+        tuple val(sample_id), file("${sample_id}.seqz.gz") into sequenza_seqz
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    sequenza-utils bam2seqz -gc ${gc_window} -p -n ${normal_mpileup} -t ${tumor_mpileup} -o ${sample_id}.seqz.gz
+    """
+    //| gzip > ${sample_id}.seqz.gz
+}
+
+process sequenza_seqz_binning {
+    label 'sequenza'
+
+    tag "${sample_id}"
+
+    //echo true
+
+    input:
+        tuple val(sample_id), file(seqz_gz) from sequenza_seqz.filter{ it[1].countLines() > 1 }
+        // .filter{} -- seqz files that contain more than just a header line
+
+    output:
+        tuple val(sample_id), file("${sample_id}.binned.seqz.gz") into binned_seqz
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    sequenza-utils seqz_binning -w 50 -s ${seqz_gz} -o ${sample_id}.binned.seqz.gz
     """
 }

@@ -332,9 +332,12 @@ process samtools_mpileup_n {
 
     publishDir params.output, overwrite: true
 
+    // -l ${bed_file}
+    // -B --no-BAQ
+    // -E --redo-BAQ
     script:
     """
-    samtools mpileup -f ${ref_fasta} -d 1000000 -A -E -l ${bed_file} ${final_bam} > ${sample_id}.normal.mpileup
+    samtools mpileup -f ${ref_fasta} -d 1000000 -A -B ${final_bam} > ${sample_id}.normal.mpileup
     """
 }
 
@@ -355,9 +358,12 @@ process samtools_mpileup_t {
 
     publishDir params.output, overwrite: true
 
+    // -l ${bed_file}
+    // -B --no-BAQ
+    // -E --redo-BAQ
     script:
     """
-    samtools mpileup -f ${ref_fasta} -d 1000000 -A -E -l ${bed_file} ${final_bam} > ${sample_id}.tumor.mpileup
+    samtools mpileup -f ${ref_fasta} -d 1000000 -A -B ${final_bam} > ${sample_id}.tumor.mpileup
     """
 }
 
@@ -375,7 +381,7 @@ process sequenza_pileup2seqz {
         tuple val(sample_id), file(normal_mpileup), file(tumor_mpileup) from paired_mpileups
 
     output:
-        tuple val(sample_id), file("${sample_id}.seqz.gz") into sequenza_seqz
+        tuple val(sample_id), file("${sample_id}.seqz") into sequenza_seqz
 
     cpus 16
 
@@ -383,7 +389,7 @@ process sequenza_pileup2seqz {
 
     script:
     """
-    sequenza-utils bam2seqz -gc ${gc_window} -p -n ${normal_mpileup} -t ${tumor_mpileup} -o ${sample_id}.seqz.gz
+    sequenza-utils bam2seqz -gc ${gc_window} -p -n ${normal_mpileup} -t ${tumor_mpileup} -o ${sample_id}.seqz
     """
     //| gzip > ${sample_id}.seqz.gz
 }
@@ -410,4 +416,74 @@ process sequenza_seqz_binning {
     """
     sequenza-utils seqz_binning -w 50 -s ${seqz_gz} -o ${sample_id}.binned.seqz.gz
     """
+}
+
+process sequenza_R {
+    label 'sequenza'
+
+    tag "${sample_id}"
+
+    //echo true
+
+    input:
+        tuple val(sample_id), file(binned_seqz_gz) from binned_seqz
+
+    output:
+        tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.ave_depth.txt"), file("${sample_id}.nitz.copynumber_calls.txt") into sequenza_R_files
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    shell:
+    '''
+	#-----------------------------------------------------------------------------------------------
+	#RUN SEQUENZA, R
+	#-----------------------------------------------------------------------------------------------
+	#Create an executable R script, run it and quit it!
+	echo 'library(\"sequenza\")'>!{sample_id}.sequenza.r
+	echo 'data.file <- \"!{binned_seqz_gz}\"' >> !{sample_id}.sequenza.r
+	echo 'seqz.data <- read.seqz(data.file)' >> !{sample_id}.sequenza.r
+	echo 'gc.stats <- gc.sample.stats(data.file)' >> !{sample_id}.sequenza.r
+	echo 'test <- sequenza.extract(data.file)' >> !{sample_id}.sequenza.r
+	echo 'CP.example <- sequenza.fit(test)' >> !{sample_id}.sequenza.r
+	echo 'sequenza.results(sequenza.extract = test, cp.table = CP.example, sample.id = \"!{sample_id}\", out.dir=\"./\")' >> !{sample_id}.sequenza.r
+	echo 'cint <- get.ci(CP.example)' >> !{sample_id}.sequenza.r
+
+	#Plot cellularity
+	echo 'jpeg(\"!{sample_id}.nitz.cellularity.jpg\")' >> !{sample_id}.sequenza.r
+	echo 'cp.plot(CP.example)' >> !{sample_id}.sequenza.r
+	echo 'cp.plot.contours(CP.example, add = TRUE, likThresh=c(0.95))' >> !{sample_id}.sequenza.r
+	echo 'dev.off()' >> !{sample_id}.sequenza.r
+
+	#Call CNVs
+	echo 'cellularity <- cint\$max.cellularity' >> !{sample_id}.sequenza.r
+	echo 'ploidy <- cint\$max.ploidy' >> !{sample_id}.sequenza.r
+	echo 'avg.depth.ratio <- mean(test\$gc\$adj[,2])' >> !{sample_id}.sequenza.r
+
+	#Save parameters to file
+	echo 'cellularity' >> !{sample_id}.sequenza.r
+	echo 'write(cellularity, file = \"!{sample_id}.nitz.cellularity.txt\")' >> !{sample_id}.sequenza.r
+	echo 'write(ploidy, file = \"!{sample_id}.nitz.ploidy.txt\")' >>!{sample_id}.sequenza.r
+	echo 'write(avg.depth.ratio, file = \"!{sample_id}.nitz.ave_depth.txt\")' >> !{sample_id}.sequenza.r
+
+	#Detect variant alleles
+	echo 'mut.tab <- na.exclude(do.call(rbind, test\$mutations))' >> !{sample_id}.sequenza.r
+	echo 'mut.alleles <- mufreq.bayes(mufreq = mut.tab\$F, depth.ratio = mut.tab\$adjusted.ratio, cellularity = cellularity, ploidy = ploidy, avg.depth.ratio = avg.depth.ratio)' >> !{sample_id}.sequenza.r
+
+	#Detect CN variation
+	echo 'seg.tab <- na.exclude(do.call(rbind, test\$segments))' >> !{sample_id}.sequenza.r
+	echo 'cn.alleles <- baf.bayes(Bf = seg.tab\$Bf, depth.ratio = seg.tab\$depth.ratio, cellularity = cellularity, ploidy = ploidy, avg.depth.ratio = avg.depth.ratio)' >> !{sample_id}.sequenza.r
+	echo 'seg.tab <- cbind(seg.tab, cn.alleles)' >>!{sample_id}.sequenza.r
+	echo 'seg.tab' >> !{sample_id}.sequenza.r
+
+	#write sequenza matrix to file, this will serve as input to loss score script's 2nd arg
+	echo 'write.table(seg.tab, file = \"!{sample_id}.nitz.copynumber_calls.txt\", append = FALSE)' >> !{sample_id}.sequenza.r
+	#exit
+	echo 'q()' >> !{sample_id}.sequenza.r
+	echo 'n' >> !{sample_id}.sequenza.r
+
+	#execute the R script
+	R --vanilla < !{sample_id}.sequenza.r
+    '''
 }

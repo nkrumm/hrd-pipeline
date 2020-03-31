@@ -4,26 +4,29 @@ def helpMessage() {
     log.info"""
     Usage:
     The typical command for running the pipeline is as follows:
-    ./nextflow run main.nf --tumor samples/ --normal samples/ -gc ./hg19.gc5Base_v4.txt.gz -profile docker
+    ./nextflow run main.nf --tumor samples/ --normal samples/ --gc hg19.gc.wig --cen hg19.centromere.txt -profile docker
 """.stripIndent()
 }
 params.genome = 'GRCh37'
-params.assay = 'GLTv3'
+//params.assay = 'GLTv3'
 
-// Read in the genome fasta and index
+// Read in params.genome files
 ref_fasta = file(params.genomes[params.genome].ref_fasta, checkIfExists: true)
 ref_fasta_fai = file(params.genomes[params.genome].ref_fasta_fai, checkIfExists: true)
 gatk_mills = file(params.genomes[params.genome].gatk_mills, checkIfExists: true)
 gatk_mills_index = file(params.genomes[params.genome].gatk_mills_index, checkIfExists: true)
 gatk_1kg = file(params.genomes[params.genome].gatk_1kg, checkIfExists: true)
 gatk_1kg_index = file(params.genomes[params.genome].gatk_1kg_index, checkIfExists: true)
-
 bwa_index = Channel.fromPath(params.genomes[params.genome].bwa_index, checkIfExists: true).collect()
 ref_fasta_dict = Channel.fromPath(params.genomes[params.genome].ref_fasta_dict, checkIfExists: true).collect()
-//picard_intervals = file(params.assays[params.assay].picard_intervals, checkIfExists: true)
-bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
 
+// Read in params.assay files
+//picard_intervals = file(params.assays[params.assay].picard_intervals, checkIfExists: true)
+//bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
+
+// Read in command line input files
 gc_window = file(params.gc, checkIfExists: true)
+centromere_file = file(params.cen, checkIfExists: true)
 fastq_pairs_n = Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 fastq_pairs_t = Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 
@@ -322,7 +325,6 @@ process samtools_mpileup_n {
 
     input:
         path ref_fasta
-        path bed_file
         tuple val(sample_id), file(final_bam) from final_bams_n
 
     output:
@@ -348,7 +350,6 @@ process samtools_mpileup_t {
 
     input:
         path ref_fasta
-        path bed_file
         tuple val(sample_id), file(final_bam) from final_bams_t
 
     output:
@@ -429,7 +430,7 @@ process sequenza_R {
         tuple val(sample_id), file(binned_seqz_gz) from binned_seqz
 
     output:
-        tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.ave_depth.txt"), file("${sample_id}.nitz.copynumber_calls.txt") into sequenza_R_files
+        tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.ave_depth.txt"), file("${sample_id}.nitz.copynumber_calls.txt"), file("${sample_id}_genome_view.pdf") into sequenza_R_files
 
     cpus 16
 
@@ -459,7 +460,8 @@ process sequenza_R {
 	#Call CNVs
 	echo 'cellularity <- cint\$max.cellularity' >> !{sample_id}.sequenza.r
 	echo 'ploidy <- cint\$max.ploidy' >> !{sample_id}.sequenza.r
-	echo 'avg.depth.ratio <- mean(test\$gc\$adj[,2])' >> !{sample_id}.sequenza.r
+    echo 'seg_table <- read.table(\"!{sample_id}_segments.txt\", header = TRUE, sep = \"\\t\", dec = \".\")' >> !{sample_id}.sequenza.r
+	echo 'avg.depth.ratio <- mean(seg_table$depth.ratio)' >> !{sample_id}.sequenza.r
 
 	#Save parameters to file
 	echo 'cellularity' >> !{sample_id}.sequenza.r
@@ -486,4 +488,33 @@ process sequenza_R {
 	#execute the R script
 	R --vanilla < !{sample_id}.sequenza.r
     '''
+}
+
+process loh_score {
+    label 'loh_score'
+
+    tag "${sample_id}"
+
+    //echo true
+
+    input:
+        path centromere_file
+        tuple val(sample_id), file(cellularity), file(ploidy), file(ave_depth), file(copynumber_calls), file(genome_pdf) from sequenza_R_files
+
+    output:
+        tuple val(sample_id), file("${sample_id}.nitz.score.txt") into scoring_output
+
+    cpus 16
+
+    publishDir params.output, overwrite: true
+
+    script:
+    """
+    python2 /LOH_score_chr_arms_V4.py ${centromere_file} ${copynumber_calls} ${sample_id}.nitz.score.txt 0.75
+    echo "" >> ${sample_id}.nitz.score.txt
+    echo -n "Estimated tumor cellularity: " >> ${sample_id}.nitz.score.txt
+    cat ${cellularity} >> ${sample_id}.nitz.score.txt
+    echo -n "Estimated ploidy: " >> ${sample_id}.nitz.score.txt
+    cat ${ploidy} >> ${sample_id}.nitz.score.txt
+    """
 }

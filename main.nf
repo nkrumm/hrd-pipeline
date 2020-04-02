@@ -30,48 +30,54 @@ centromere_file = file(params.cen, checkIfExists: true)
 fastq_pairs_n = Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 fastq_pairs_t = Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
 
-process bwa_mem_n {
-    // Align fastqs
-    label 'bwa'
-
-    tag "${sample_id}"
+process define_normals {
+    // Add val to fastq_pairs channel
+    tag "${sample_id}-normal"
 
     input:
-        path ref_fasta
-        path bwa_index
         tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pairs_n
-
+    
     output:
-        tuple val(sample_id), file("${sample_id}.normal.sam") into aligned_sams_n
+        tuple val(sample_id), val("normal"), file(fastq1), file(fastq2) into normal_samples
 
-    cpus 16
-
-    publishDir params.output, overwrite: true
-
-    // -Y use soft clipping for supplimentary alignment
-    // -K process INT input bases in each batch regardless of nThreads (for reproducibility)
-    // -C append FASTA/FASTQ comment to SAM output
     script:
-    """ 
-    bwa mem -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" -K 100000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.normal.sam
+    """
     """
 }
 
-process bwa_mem_t {
-    // Align fastqs
-    label 'bwa'
-
-    tag "${sample_id}"
-
+process define_tumors {
+    // Add val to fastq_pairs channel
+    tag "${sample_id}-tumor"
     input:
-        path ref_fasta
-        path bwa_index
         tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pairs_t
 
     output:
-        tuple val(sample_id), file("${sample_id}.tumor.sam") into aligned_sams_t
+        tuple val(sample_id), val("tumor"), file(fastq1), file(fastq2) into tumor_samples
 
-    cpus 16
+    script:
+    """
+    """
+}
+
+process bwa_mem {
+    // Align fastqs
+    label 'bwa'
+
+    tag "${sample_id}-${sample_type}"
+
+    fastqs = normal_samples.mix(tumor_samples)
+
+    input:
+        path ref_fasta
+        path bwa_index
+        tuple val(sample_id), val(sample_type), file(fastq1), file(fastq2) from fastqs
+
+    output:
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.sam") into aligned_sams
+
+    cpus 8
+
+    //memory "8GB"
 
     //publishDir params.output, overwrite: true
 
@@ -80,98 +86,60 @@ process bwa_mem_t {
     // -C append FASTA/FASTQ comment to SAM output
     script:
     """ 
-    bwa mem -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" -K 100000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.tumor.sam
+    bwa mem -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" -K 100000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.${sample_type}.sam
     """
 }
 
-process samtools_view_sort_n {
+process samtools_view_sort {
     label 'samtools'
 
-    tag "${sample_id}"
+    tag "${sample_id}-${sample_type}"
 
     input:
-        tuple val(sample_id), file(sam_file) from aligned_sams_n
+        tuple val(sample_id), val(sample_type), file(sam_file) from aligned_sams
 
     output:
-        tuple val(sample_id), file("${sample_id}.raw.normal.bam") into raw_bams_n
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.raw.bam") into raw_bams
 
-    cpus 16
+    cpus 8
+
+    //memory "4GB"
 
     publishDir params.output, overwrite: true
 
     script:
     """
-    samtools view -hb $sam_file | samtools sort - -o ${sample_id}.raw.normal.bam
+    samtools view -hb $sam_file | samtools sort - -o ${sample_id}.${sample_type}.raw.bam
     """
 }
 
-process samtools_view_sort_t {
-    label 'samtools'
-
-    tag "${sample_id}"
-
-    input:
-        tuple val(sample_id), file(sam_file) from aligned_sams_t
-
-    output:
-        tuple val(sample_id), file("${sample_id}.raw.tumor.bam") into raw_bams_t
-
-    cpus 16
-
-    publishDir params.output, overwrite: true
-
-    script:
-    """
-    samtools view -hb $sam_file | samtools sort - -o ${sample_id}.raw.tumor.bam
-    """
-}
-
-process picard_remove_duplicates_n {
+process picard_remove_duplicates {
     label 'picard'
 
-    tag "${sample_id}"
+    tag "${sample_id}-${sample_type}"
 
     input:
-        tuple val(sample_id), file(bam_file) from raw_bams_n
+        tuple val(sample_id), val(sample_type), file(bam_file) from raw_bams
 
     output:
-        tuple val(sample_id), file("${sample_id}.rmdup.normal.bam") into rmdup_bams_recal_n, rmdup_bams_n
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam") into rmdup_bams_recal, rmdup_bams
 
-    cpus 16
+    cpus 8
 
-    publishDir params.output, overwrite: true
-
-    script:
-    """
-    java -Xmx4g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.rmdup.normal.bam METRICS_FILE=${sample_id}.normal.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
-    """
-}
-
-process picard_remove_duplicates_t {
-    label 'picard'
-
-    tag "${sample_id}"
-
-    input:
-        tuple val(sample_id), file(bam_file) from raw_bams_t
-
-    output:
-        tuple val(sample_id), file("${sample_id}.rmdup.tumor.bam") into rmdup_bams_recal_t, rmdup_bams_t
-
-    cpus 16
+    memory "4GB"
 
     //publishDir params.output, overwrite: true
 
     script:
     """
-    java -Xmx4g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.rmdup.tumor.bam METRICS_FILE=${sample_id}.tumor.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
+    java -Xmx${task.memory.toGiga()}g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.${sample_type}.rmdup.bam METRICS_FILE=${sample_id}.${sample_type}.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
     """
 }
 
-process gatk_bqsr_n {
+process gatk_bqsr {
     label 'gatk'
 
-    tag "${sample_id}"
+    tag "${sample_id}-${sample_type}"
 
     input:
         path ref_fasta
@@ -181,156 +149,90 @@ process gatk_bqsr_n {
         path gatk_mills_index
         path gatk_1kg
         path gatk_1kg_index
-        tuple val(sample_id), file(bam_file) from rmdup_bams_recal_n
+        tuple val(sample_id), val(sample_type), file(bam_file) from rmdup_bams_recal
 
     output:
-        tuple val(sample_id), file("${sample_id}.normal.recal_table") into bqsr_recal_tables_n
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.recal_table") into bqsr_recal_tables
 
-    cpus 16
+    cpus 8
+
+    memory "4GB"
 
     //publishDir params.output, overwrite: true
 
     script:
     """
-    gatk --java-options "-Xmx4G" BaseRecalibrator --reference ${ref_fasta} --input ${bam_file} --known-sites ${gatk_mills} --known-sites ${gatk_1kg} --output ${sample_id}.normal.recal_table
+    gatk --java-options "-Xmx${task.memory.toGiga()}g" BaseRecalibrator --reference ${ref_fasta} --input ${bam_file} --known-sites ${gatk_mills} --known-sites ${gatk_1kg} --output ${sample_id}.${sample_type}.recal_table
     """
 }
 
-process gatk_bqsr_t {
+process gatk_apply_bqsr {
     label 'gatk'
 
-    tag "${sample_id}"
+    tag "${sample_id}-${sample_type}"
+
+    bqsr_apply = rmdup_bams.join(bqsr_recal_tables, by: [0,1])
 
     input:
         path ref_fasta
         path ref_fasta_fai
         path ref_fasta_dict
-        path gatk_mills
-        path gatk_mills_index
-        path gatk_1kg
-        path gatk_1kg_index
-        tuple val(sample_id), file(bam_file) from rmdup_bams_recal_t
+        tuple val(sample_id), val(sample_type), file(bam_file), file(recal_table) from bqsr_apply
 
     output:
-        tuple val(sample_id), file("${sample_id}.tumor.recal_table") into bqsr_recal_tables_t
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.bqsr.bam") into bqsr_bams
 
-    cpus 16
+    cpus 8
+
+    memory "4GB"
 
     //publishDir params.output, overwrite: true
 
     script:
     """
-    gatk --java-options "-Xmx4G" BaseRecalibrator --reference ${ref_fasta} --input ${bam_file} --known-sites ${gatk_mills} --known-sites ${gatk_1kg} --output ${sample_id}.tumor.recal_table
+    gatk ApplyBQSR --reference ${ref_fasta} --input ${bam_file} --bqsr-recal-file ${recal_table} --output ${sample_id}.${sample_type}.bqsr.bam
     """
 }
 
-process gatk_apply_bqsr_n {
-    label 'gatk'
+process samtools_final_bam {
+    label 'samtools'
 
-    tag "${sample_id}"
-
-    bqsr_apply_n = rmdup_bams_n.join(bqsr_recal_tables_n)
+    tag "${sample_id}-${sample_type}"
 
     input:
-        path ref_fasta
-        path ref_fasta_fai
-        path ref_fasta_dict
-        tuple val(sample_id), file(bam_file), file(recal_table) from bqsr_apply_n
+        tuple val(sample_id), val(sample_type), file(bqsr_bam) from bqsr_bams
 
     output:
-        tuple val(sample_id), file("${sample_id}.bqsr.normal.bam") into bqsr_bams_n
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.final.bam") into final_bams
 
-    cpus 16
+    cpus 8
+
+    memory "4GB"
 
     publishDir params.output, overwrite: true
 
     script:
     """
-    gatk ApplyBQSR --reference ${ref_fasta} --input ${bam_file} --bqsr-recal-file ${recal_table} --output ${sample_id}.bqsr.normal.bam
+    samtools sort ${bqsr_bam} -o ${sample_id}.${sample_type}.final.bam && samtools index ${sample_id}.${sample_type}.final.bam
     """
 }
 
-process gatk_apply_bqsr_t {
-    label 'gatk'
+process samtools_mpileup {
+    label 'samtools'
 
-    tag "${sample_id}"
+    tag "${sample_id}-${sample_type}"
 
-    bqsr_apply_t = rmdup_bams_t.join(bqsr_recal_tables_t)
 
     input:
         path ref_fasta
-        path ref_fasta_fai
-        path ref_fasta_dict
-        tuple val(sample_id), file(bam_file), file(recal_table) from bqsr_apply_t
+        tuple val(sample_id), val(sample_type), file(final_bam) from final_bams
 
     output:
-        tuple val(sample_id), file("${sample_id}.bqsr.tumor.bam") into bqsr_bams_t
+        tuple val(sample_id), file("${sample_id}.${sample_type}.mpileup") into mpileups
 
-    cpus 16
+    cpus 8
 
-    //publishDir params.output, overwrite: true
-
-    script:
-    """
-    gatk ApplyBQSR --reference ${ref_fasta} --input ${bam_file} --bqsr-recal-file ${recal_table} --output ${sample_id}.bqsr.tumor.bam
-    """
-}
-
-process samtools_final_bam_n {
-    label 'samtools'
-
-    tag "${sample_id}"
-
-    input:
-        tuple val(sample_id), file(bqsr_bam) from bqsr_bams_n
-
-    output:
-        tuple val(sample_id), file("${sample_id}.normal.final.bam") into final_bams_n
-
-    cpus 16
-
-    publishDir params.output, overwrite: true
-
-    script:
-    """
-    samtools sort ${bqsr_bam} -o ${sample_id}.normal.final.bam && samtools index ${sample_id}.normal.final.bam
-    """
-}
-
-process samtools_final_bam_t {
-    label 'samtools'
-
-    tag "${sample_id}"
-
-    input:
-        tuple val(sample_id), file(bqsr_bam) from bqsr_bams_t
-
-    output:
-        tuple val(sample_id), file("${sample_id}.tumor.final.bam") into final_bams_t
-
-    cpus 16
-
-    publishDir params.output, overwrite: true
-
-    script:
-    """
-    samtools sort ${bqsr_bam} -o ${sample_id}.tumor.final.bam && samtools index ${sample_id}.tumor.final.bam
-    """
-}
-
-process samtools_mpileup_n {
-    label 'samtools'
-
-    tag "${sample_id}"
-
-    input:
-        path ref_fasta
-        tuple val(sample_id), file(final_bam) from final_bams_n
-
-    output:
-        tuple val(sample_id), file("${sample_id}.normal.mpileup") into mpileup_n
-
-    cpus 16
+    memory "4GB"
 
     publishDir params.output, overwrite: true
 
@@ -339,32 +241,7 @@ process samtools_mpileup_n {
     // -E --redo-BAQ
     script:
     """
-    samtools mpileup -f ${ref_fasta} -d 1000000 -A -B ${final_bam} > ${sample_id}.normal.mpileup
-    """
-}
-
-process samtools_mpileup_t {
-    label 'samtools'
-
-    tag "${sample_id}"
-
-    input:
-        path ref_fasta
-        tuple val(sample_id), file(final_bam) from final_bams_t
-
-    output:
-        tuple val(sample_id), file("${sample_id}.tumor.mpileup") into mpileup_t
-
-    cpus 16
-
-    publishDir params.output, overwrite: true
-
-    // -l ${bed_file}
-    // -B --no-BAQ
-    // -E --redo-BAQ
-    script:
-    """
-    samtools mpileup -f ${ref_fasta} -d 1000000 -A -B ${final_bam} > ${sample_id}.tumor.mpileup
+    samtools mpileup -f ${ref_fasta} -d 1000000 -A -B ${final_bam} > ${sample_id}.${sample_type}.mpileup
     """
 }
 
@@ -373,26 +250,32 @@ process sequenza_pileup2seqz {
 
     tag "${sample_id}"
 
-    //echo true
+    echo true
 
-    paired_mpileups = mpileup_n.join(mpileup_t)
+    paired_mpileups = mpileups
+        .groupTuple(size: 2)
+        .map{
+            sample_id, mpileup_files -> tuple( sample_id, mpileup_files.sort{ it.getName() } )
+            }
 
     input:
         path gc_window
-        tuple val(sample_id), file(normal_mpileup), file(tumor_mpileup) from paired_mpileups
+        tuple val(sample_id), file(mpileup_files) from paired_mpileups
+        // [sample_id, [normal.mpileup, tumor.mpileup] ]
 
     output:
         tuple val(sample_id), file("${sample_id}.seqz") into sequenza_seqz
 
-    cpus 16
+    cpus 8
+
+    //memory "4GB"
 
     publishDir params.output, overwrite: true
 
     script:
     """
-    sequenza-utils bam2seqz -gc ${gc_window} -p -n ${normal_mpileup} -t ${tumor_mpileup} -o ${sample_id}.seqz
+    sequenza-utils bam2seqz -gc ${gc_window} -p -n ${mpileup_files[0]} -t ${mpileup_files[1]} -o ${sample_id}.seqz
     """
-    //| gzip > ${sample_id}.seqz.gz
 }
 
 process sequenza_seqz_binning {
@@ -409,9 +292,11 @@ process sequenza_seqz_binning {
     output:
         tuple val(sample_id), file("${sample_id}.binned.seqz.gz") into binned_seqz
 
-    cpus 16
+    cpus 8
 
-    publishDir params.output, overwrite: true
+    //memory "4GB"
+
+    //publishDir params.output, overwrite: true
 
     script:
     """
@@ -432,7 +317,9 @@ process sequenza_R {
     output:
         tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.ave_depth.txt"), file("${sample_id}.nitz.copynumber_calls.txt"), file("${sample_id}_genome_view.pdf") into sequenza_R_files
 
-    cpus 16
+    cpus 8
+
+    //memory "4GB"
 
     publishDir params.output, overwrite: true
 
@@ -504,7 +391,9 @@ process loh_score {
     output:
         tuple val(sample_id), file("${sample_id}.nitz.score.txt") into scoring_output
 
-    cpus 16
+    cpus 8
+
+    //memory "4GB"
 
     publishDir params.output, overwrite: true
 

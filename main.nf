@@ -27,45 +27,22 @@ ref_fasta_dict = Channel.fromPath(params.genomes[params.genome].ref_fasta_dict, 
 // Read in command line input files
 gc_window = file(params.gc, checkIfExists: true)
 centromere_file = file(params.cen, checkIfExists: true)
-fastq_pairs_n = Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
-fastq_pairs_t = Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
+Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
+                       .map { tuple( it[0], "normal", it[1], it[2] ) }
+                       .set {normal_samples}
 
-process define_normals {
-    // Add val to fastq_pairs channel
-    tag "${sample_id}-normal"
+Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
+                       .map { tuple( it[0], "tumor", it[1], it[2] ) }
+                       .set {tumor_samples}
 
-    input:
-        tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pairs_n
-    
-    output:
-        tuple val(sample_id), val("normal"), file(fastq1), file(fastq2) into normal_samples
+fastqs = normal_samples.mix(tumor_samples)
 
-    script:
-    """
-    """
-}
 
-process define_tumors {
-    // Add val to fastq_pairs channel
-    tag "${sample_id}-tumor"
-    input:
-        tuple val(sample_id), file(fastq1), file(fastq2) from fastq_pairs_t
-
-    output:
-        tuple val(sample_id), val("tumor"), file(fastq1), file(fastq2) into tumor_samples
-
-    script:
-    """
-    """
-}
-
-process bwa_mem {
-    // Align fastqs
-    label 'bwa'
+process alignment {
+    // Align fastqs, sort and index
+    label 'alignment'
 
     tag "${sample_id}-${sample_type}"
-
-    fastqs = normal_samples.mix(tumor_samples)
 
     input:
         path ref_fasta
@@ -73,45 +50,26 @@ process bwa_mem {
         tuple val(sample_id), val(sample_type), file(fastq1), file(fastq2) from fastqs
 
     output:
-        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.sam") into aligned_sams
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.raw.bam") into raw_bams
 
     cpus 8
 
     //memory "8GB"
 
-    //publishDir params.output, overwrite: true
+    // publishDir params.output, overwrite: true
 
-    // -Y use soft clipping for supplimentary alignment
     // -K process INT input bases in each batch regardless of nThreads (for reproducibility)
-    // -C append FASTA/FASTQ comment to SAM output
     script:
     """ 
-    bwa mem -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" -K 100000000 -t ${task.cpus} ${ref_fasta} ${fastq1} ${fastq2} > ${sample_id}.${sample_type}.sam
-    """
+    bwa mem \
+       -R "@RG\\tID:${sample_id}\\tPL:ILLUMINA\\tPU:NA\\tSM:${sample_id}\\t" \
+       -K 100000000 \
+       -t ${task.cpus}  \
+       ${ref_fasta} ${fastq1} ${fastq2} 2> log.txt \
+     | samtools sort -t${task.cpus} -m4G - -o ${sample_id}.${sample_type}.raw.bam
+     """
 }
 
-process samtools_view_sort {
-    label 'samtools'
-
-    tag "${sample_id}-${sample_type}"
-
-    input:
-        tuple val(sample_id), val(sample_type), file(sam_file) from aligned_sams
-
-    output:
-        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.raw.bam") into raw_bams
-
-    cpus 8
-
-    //memory "4GB"
-
-    publishDir params.output, overwrite: true
-
-    script:
-    """
-    samtools view -hb $sam_file | samtools sort - -o ${sample_id}.${sample_type}.raw.bam
-    """
-}
 
 process picard_remove_duplicates {
     label 'picard'
@@ -122,7 +80,7 @@ process picard_remove_duplicates {
         tuple val(sample_id), val(sample_type), file(bam_file) from raw_bams
 
     output:
-        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam") into rmdup_bams_recal, rmdup_bams
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam") into rmdup_bams
 
     cpus 8
 
@@ -132,7 +90,15 @@ process picard_remove_duplicates {
 
     script:
     """
-    java -Xmx${task.memory.toGiga()}g -jar /usr/picard/picard.jar MarkDuplicates INPUT=${bam_file} OUTPUT=${sample_id}.${sample_type}.rmdup.bam METRICS_FILE=${sample_id}.${sample_type}.quality_metrics REMOVE_DUPLICATES=true ASSUME_SORTED=true VALIDATION_STRINGENCY=SILENT CREATE_INDEX=true 2> picard_rmdupes.log
+    java -Xmx${task.memory.toGiga()}g -jar /usr/picard/picard.jar \
+    MarkDuplicates \
+    INPUT=${bam_file} \
+    OUTPUT=${sample_id}.${sample_type}.rmdup.bam \
+    METRICS_FILE=${sample_id}.${sample_type}.quality_metrics \
+    REMOVE_DUPLICATES=true \
+    ASSUME_SORTED=true \
+    VALIDATION_STRINGENCY=SILENT \
+    CREATE_INDEX=true 2> picard_rmdupes.log
     """
 }
 
@@ -149,35 +115,7 @@ process gatk_bqsr {
         path gatk_mills_index
         path gatk_1kg
         path gatk_1kg_index
-        tuple val(sample_id), val(sample_type), file(bam_file) from rmdup_bams_recal
-
-    output:
-        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.recal_table") into bqsr_recal_tables
-
-    cpus 8
-
-    memory "4GB"
-
-    //publishDir params.output, overwrite: true
-
-    script:
-    """
-    gatk --java-options "-Xmx${task.memory.toGiga()}g" BaseRecalibrator --reference ${ref_fasta} --input ${bam_file} --known-sites ${gatk_mills} --known-sites ${gatk_1kg} --output ${sample_id}.${sample_type}.recal_table
-    """
-}
-
-process gatk_apply_bqsr {
-    label 'gatk'
-
-    tag "${sample_id}-${sample_type}"
-
-    bqsr_apply = rmdup_bams.join(bqsr_recal_tables, by: [0,1])
-
-    input:
-        path ref_fasta
-        path ref_fasta_fai
-        path ref_fasta_dict
-        tuple val(sample_id), val(sample_type), file(bam_file), file(recal_table) from bqsr_apply
+        tuple val(sample_id), val(sample_type), file(bam_file) from rmdup_bams
 
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.bqsr.bam") into bqsr_bams
@@ -190,9 +128,22 @@ process gatk_apply_bqsr {
 
     script:
     """
-    gatk ApplyBQSR --reference ${ref_fasta} --input ${bam_file} --bqsr-recal-file ${recal_table} --output ${sample_id}.${sample_type}.bqsr.bam
+    gatk --java-options "-Xmx${task.memory.toGiga()}g" \
+    BaseRecalibrator \
+    --reference ${ref_fasta} \
+    --input ${bam_file} \
+    --known-sites ${gatk_mills} \
+    --known-sites ${gatk_1kg} \
+    --output ${sample_id}.${sample_type}.recal_table
+
+    gatk ApplyBQSR \
+    --reference ${ref_fasta} \
+    --input ${bam_file} \
+    --bqsr-recal-file ${sample_id}.${sample_type}.recal_table \
+    --output ${sample_id}.${sample_type}.bqsr.bam
     """
 }
+
 
 process samtools_final_bam {
     label 'samtools'
@@ -204,6 +155,7 @@ process samtools_final_bam {
 
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.final.bam") into final_bams
+        file("*.bai")
 
     cpus 8
 
@@ -213,7 +165,9 @@ process samtools_final_bam {
 
     script:
     """
-    samtools sort ${bqsr_bam} -o ${sample_id}.${sample_type}.final.bam && samtools index ${sample_id}.${sample_type}.final.bam
+    samtools sort ${bqsr_bam} -o ${sample_id}.${sample_type}.final.bam
+
+    samtools index ${sample_id}.${sample_type}.final.bam
     """
 }
 

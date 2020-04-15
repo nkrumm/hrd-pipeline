@@ -1,0 +1,37 @@
+{
+    "properties": {
+        "input_folder_normal": {
+            "default": "s3://uwlm-personal/ghuff/hrd/fastq/dev_normal/",
+            "title": "Folder with normal FASTQs",
+            "type": "string"
+        },
+        "input_folder_tumor": {
+            "default": "s3://uwlm-personal/ghuff/hrd/fastq/dev_tumor/",
+            "title": "Folder with tumor FASTQs",
+            "type": "string"
+        },
+        "gc_window": {
+            "default": "s3://uwlm-personal/hrd_development/input_references/hg19.nochr.gc5Base_v4.gz",
+            "title": "Genome specific GC Window wig file",
+            "type": "string"
+        },
+        "centromere": {
+            "default": "s3://uwlm-personal/hrd_development/input_references/hg19.centromere.txt",
+            "title": "Genome specific centromere file",
+            "type": "string"
+        },
+        "run_id": {
+            "default": "dev",
+            "title": "Run ID",
+            "type": "string"
+        }
+    },
+    "required": [
+        "input_folder_normal",
+        "input_folder_tumor",
+        "gc_window",
+        "centromere",
+        "run_id"
+    ],
+    "type": "object"
+}

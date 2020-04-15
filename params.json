@@ -1,0 +1,8 @@
+{
+    "output": "s3://uwlm-personal/ghuff/hrd/out/",
+    "input_folder_normal": "s3://uwlm-personal/ghuff/hrd/fastq/dev_normal/",
+    "input_folder_tumor": "s3://uwlm-personal/ghuff/hrd/fastq/dev_tumor/",
+    "gc_window": "s3://uwlm-personal/hrd_development/input_references/hg19.nochr.gc5Base_v4.gz",
+    "centromere": "s3://uwlm-personal/hrd_development/input_references/hg19.centromere.txt",
+    "run_id": "dev"
+}

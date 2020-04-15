@@ -8,25 +8,18 @@ def helpMessage() {
 """.stripIndent()
 }
 params.genome = 'GRCh37'
-//params.assay = 'GLTv3'
 
 // Read in params.genome files
 ref_fasta = file(params.genomes[params.genome].ref_fasta, checkIfExists: true)
-ref_fasta_fai = file(params.genomes[params.genome].ref_fasta_fai, checkIfExists: true)
+ref_index = Channel.fromPath(params.genomes[params.genome].ref_index, checkIfExists: true).collect()
 gatk_mills = file(params.genomes[params.genome].gatk_mills, checkIfExists: true)
 gatk_mills_index = file(params.genomes[params.genome].gatk_mills_index, checkIfExists: true)
 gatk_1kg = file(params.genomes[params.genome].gatk_1kg, checkIfExists: true)
 gatk_1kg_index = file(params.genomes[params.genome].gatk_1kg_index, checkIfExists: true)
-bwa_index = Channel.fromPath(params.genomes[params.genome].bwa_index, checkIfExists: true).collect()
-ref_fasta_dict = Channel.fromPath(params.genomes[params.genome].ref_fasta_dict, checkIfExists: true).collect()
-
-// Read in params.assay files
-//picard_intervals = file(params.assays[params.assay].picard_intervals, checkIfExists: true)
-//bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
 
 // Read in command line input files
-gc_window = file(params.gc, checkIfExists: true)
-centromere_file = file(params.cen, checkIfExists: true)
+gc_window = file(params.gc_window, checkIfExists: true)
+centromere_file = file(params.centromere, checkIfExists: true)
 Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
                        .map { tuple( it[0], "normal", it[1], it[2] ) }
                        .set {normal_samples}
@@ -46,7 +39,7 @@ process alignment {
 
     input:
         path ref_fasta
-        path bwa_index
+        path ref_index
         tuple val(sample_id), val(sample_type), file(fastq1), file(fastq2) from fastqs
 
     output:
@@ -56,7 +49,7 @@ process alignment {
 
     //memory "8GB"
 
-    // publishDir params.output, overwrite: true
+    // publishDir params.output, mode: 'copy', overwrite: true
 
     // -K process INT input bases in each batch regardless of nThreads (for reproducibility)
     script:
@@ -80,13 +73,13 @@ process picard_remove_duplicates {
         tuple val(sample_id), val(sample_type), file(bam_file) from raw_bams
 
     output:
-        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam") into rmdup_bams
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam"), file("${sample_id}.${sample_type}.rmdup.bai") into rmdup_bams
 
     cpus 8
 
     memory "4GB"
 
-    //publishDir params.output, overwrite: true
+    //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -109,13 +102,12 @@ process gatk_bqsr {
 
     input:
         path ref_fasta
-        path ref_fasta_fai
-        path ref_fasta_dict
+        path ref_index
         path gatk_mills
         path gatk_mills_index
         path gatk_1kg
         path gatk_1kg_index
-        tuple val(sample_id), val(sample_type), file(bam_file) from rmdup_bams
+        tuple val(sample_id), val(sample_type), file(bam_file), file(bam_bai) from rmdup_bams
 
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.bqsr.bam") into bqsr_bams
@@ -124,7 +116,7 @@ process gatk_bqsr {
 
     memory "4GB"
 
-    //publishDir params.output, overwrite: true
+    //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -161,7 +153,7 @@ process samtools_final_bam {
 
     memory "4GB"
 
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -188,7 +180,7 @@ process samtools_mpileup {
 
     memory "4GB"
 
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     // -l ${bed_file}
     // -B --no-BAQ
@@ -224,7 +216,7 @@ process sequenza_pileup2seqz {
 
     //memory "4GB"
 
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -250,7 +242,7 @@ process sequenza_seqz_binning {
 
     //memory "4GB"
 
-    //publishDir params.output, overwrite: true
+    //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -275,7 +267,7 @@ process sequenza_R {
 
     //memory "4GB"
 
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     shell:
     '''
@@ -349,7 +341,7 @@ process loh_score {
 
     //memory "4GB"
 
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """

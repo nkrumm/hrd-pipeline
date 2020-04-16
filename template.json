@@ -1,12 +1,17 @@
 {
     "properties": {
+        "run_id": {
+            "default": "single_sample_test",
+            "title": "Run ID",
+            "type": "string"
+        },
         "input_folder_normal": {
-            "default": "s3://uwlm-personal/ghuff/hrd/fastq/dev_normal/",
+            "default": "s3://uwlm-personal/hrd_development/single_sample_test/normals/",
             "title": "Folder with normal FASTQs",
             "type": "string"
         },
         "input_folder_tumor": {
-            "default": "s3://uwlm-personal/ghuff/hrd/fastq/dev_tumor/",
+            "default": "s3://uwlm-personal/hrd_development/single_sample_test/tumors/",
             "title": "Folder with tumor FASTQs",
             "type": "string"
         },
@@ -19,19 +24,14 @@
             "default": "s3://uwlm-personal/hrd_development/input_references/hg19.centromere.txt",
             "title": "Genome specific centromere file",
             "type": "string"
-        },
-        "run_id": {
-            "default": "dev",
-            "title": "Run ID",
-            "type": "string"
         }
     },
     "required": [
+        "run_id",
         "input_folder_normal",
         "input_folder_tumor",
         "gc_window",
-        "centromere",
-        "run_id"
+        "centromere"
     ],
     "type": "object"
 }

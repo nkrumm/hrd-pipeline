@@ -28,8 +28,8 @@
     },
     "required": [
         "run_id",
-        "input_folder_normal",
-        "input_folder_tumor",
+        "normal",
+        "tumor",
         "gc_window",
         "centromere"
     ],

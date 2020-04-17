@@ -5,12 +5,12 @@
             "title": "Run ID",
             "type": "string"
         },
-        "input_folder_normal": {
+        "normal": {
             "default": "s3://uwlm-personal/hrd_development/single_sample_test/normals/",
             "title": "Folder with normal FASTQs",
             "type": "string"
         },
-        "input_folder_tumor": {
+        "tumor": {
             "default": "s3://uwlm-personal/hrd_development/single_sample_test/tumors/",
             "title": "Folder with tumor FASTQs",
             "type": "string"

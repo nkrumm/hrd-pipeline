@@ -45,10 +45,6 @@ process alignment {
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.raw.bam") into raw_bams
 
-    cpus 8
-
-    //memory "8GB"
-
     // publishDir params.output, mode: 'copy', overwrite: true
 
     // -K process INT input bases in each batch regardless of nThreads (for reproducibility)
@@ -74,10 +70,6 @@ process picard_remove_duplicates {
 
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam"), file("${sample_id}.${sample_type}.rmdup.bai") into rmdup_bams
-
-    cpus 8
-
-    memory "4GB"
 
     //publishDir params.output, mode: 'copy', overwrite: true
 
@@ -112,10 +104,6 @@ process gatk_bqsr {
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.bqsr.bam") into bqsr_bams
 
-    cpus 8
-
-    memory "4GB"
-
     //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
@@ -149,10 +137,6 @@ process samtools_final_bam {
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.final.bam") into final_bams
         file("*.bai")
 
-    cpus 8
-
-    memory "4GB"
-
     publishDir params.output, mode: 'copy', overwrite: true
 
     script:
@@ -175,10 +159,6 @@ process samtools_mpileup {
 
     output:
         tuple val(sample_id), file("${sample_id}.${sample_type}.mpileup") into mpileups
-
-    cpus 8
-
-    memory "4GB"
 
     publishDir params.output, mode: 'copy', overwrite: true
 
@@ -212,10 +192,6 @@ process sequenza_pileup2seqz {
     output:
         tuple val(sample_id), file("${sample_id}.seqz") into sequenza_seqz
 
-    cpus 8
-
-    //memory "4GB"
-
     publishDir params.output, mode: 'copy', overwrite: true
 
     script:
@@ -238,10 +214,6 @@ process sequenza_seqz_binning {
     output:
         tuple val(sample_id), file("${sample_id}.binned.seqz.gz") into binned_seqz
 
-    cpus 8
-
-    //memory "4GB"
-
     //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
@@ -262,10 +234,6 @@ process sequenza_R {
 
     output:
         tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.ave_depth.txt"), file("${sample_id}.nitz.copynumber_calls.txt"), file("${sample_id}_genome_view.pdf") into sequenza_R_files
-
-    cpus 8
-
-    //memory "4GB"
 
     publishDir params.output, mode: 'copy', overwrite: true
 
@@ -336,10 +304,6 @@ process loh_score {
 
     output:
         tuple val(sample_id), file("${sample_id}.nitz.score.txt") into scoring_output
-
-    cpus 8
-
-    //memory "4GB"
 
     publishDir params.output, mode: 'copy', overwrite: true
 

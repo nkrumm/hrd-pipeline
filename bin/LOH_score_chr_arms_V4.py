@@ -1,3 +1,4 @@
+#!/usr/bin/env python2
 # coding: utf-8
 # This version is an extention of Version 2 with 2 changes 1) analysis of X chromosome was removed 2) if cnt for a segment is  0, then the bases are not counted as lost bases
 # This script does not consider cases where loss A or loss B over all available segments in a chromosomal arm/chromosome length span over 90% of the arm/chromosome. Such consistent behaviour over large areas of chromosome do NOT indicate HRD!

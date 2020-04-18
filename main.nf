@@ -292,7 +292,7 @@ process sequenza_R {
 }
 
 process loh_score {
-    label 'loh_score'
+    label 'sequenza'
 
     tag "${sample_id}"
 
@@ -309,7 +309,7 @@ process loh_score {
 
     script:
     """
-    python2 /LOH_score_chr_arms_V4.py ${centromere_file} ${copynumber_calls} ${sample_id}.nitz.score.txt 0.75
+    LOH_score_chr_arms_V4.py ${centromere_file} ${copynumber_calls} ${sample_id}.nitz.score.txt 0.75
     echo "" >> ${sample_id}.nitz.score.txt
     echo -n "Estimated tumor cellularity: " >> ${sample_id}.nitz.score.txt
     cat ${cellularity} >> ${sample_id}.nitz.score.txt

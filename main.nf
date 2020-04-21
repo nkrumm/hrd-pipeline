@@ -75,15 +75,15 @@ process picard_remove_duplicates {
 
     script:
     """
-    java -Xmx${task.memory.toGiga()}g -jar /usr/picard/picard.jar \
+    picard -Xmx${task.memory.toGiga()}g -Djava.io.tmpdir=./ -Dpicard.useLegacyParser=false \
     MarkDuplicates \
-    INPUT=${bam_file} \
-    OUTPUT=${sample_id}.${sample_type}.rmdup.bam \
-    METRICS_FILE=${sample_id}.${sample_type}.quality_metrics \
-    REMOVE_DUPLICATES=true \
-    ASSUME_SORTED=true \
-    VALIDATION_STRINGENCY=SILENT \
-    CREATE_INDEX=true 2> picard_rmdupes.log
+    -INPUT ${bam_file} \
+    -OUTPUT ${sample_id}.${sample_type}.rmdup.bam \
+    -METRICS_FILE ${sample_id}.${sample_type}.quality_metrics \
+    -REMOVE_DUPLICATES true \
+    -ASSUME_SORTED true \
+    -VALIDATION_STRINGENCY SILENT \
+    -CREATE_INDEX true 2> picard_rmdupes.log
     """
 }
 

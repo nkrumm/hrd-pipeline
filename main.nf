@@ -8,25 +8,18 @@ def helpMessage() {
 """.stripIndent()
 }
 params.genome = 'GRCh37'
-//params.assay = 'GLTv3'
 
 // Read in params.genome files
 ref_fasta = file(params.genomes[params.genome].ref_fasta, checkIfExists: true)
-ref_fasta_fai = file(params.genomes[params.genome].ref_fasta_fai, checkIfExists: true)
+ref_index = Channel.fromPath(params.genomes[params.genome].ref_index, checkIfExists: true).collect()
 gatk_mills = file(params.genomes[params.genome].gatk_mills, checkIfExists: true)
 gatk_mills_index = file(params.genomes[params.genome].gatk_mills_index, checkIfExists: true)
 gatk_1kg = file(params.genomes[params.genome].gatk_1kg, checkIfExists: true)
 gatk_1kg_index = file(params.genomes[params.genome].gatk_1kg_index, checkIfExists: true)
-bwa_index = Channel.fromPath(params.genomes[params.genome].bwa_index, checkIfExists: true).collect()
-ref_fasta_dict = Channel.fromPath(params.genomes[params.genome].ref_fasta_dict, checkIfExists: true).collect()
-
-// Read in params.assay files
-//picard_intervals = file(params.assays[params.assay].picard_intervals, checkIfExists: true)
-//bed_file = file(params.assays[params.assay].bed_file, checkIfExists: true)
 
 // Read in command line input files
-gc_window = file(params.gc, checkIfExists: true)
-centromere_file = file(params.cen, checkIfExists: true)
+gc_window = file(params.gc_window, checkIfExists: true)
+centromere_file = file(params.centromere, checkIfExists: true)
 Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
                        .map { tuple( it[0], "normal", it[1], it[2] ) }
                        .set {normal_samples}
@@ -46,17 +39,13 @@ process alignment {
 
     input:
         path ref_fasta
-        path bwa_index
+        path ref_index
         tuple val(sample_id), val(sample_type), file(fastq1), file(fastq2) from fastqs
 
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.raw.bam") into raw_bams
 
-    cpus 8
-
-    //memory "8GB"
-
-    // publishDir params.output, overwrite: true
+    // publishDir params.output, mode: 'copy', overwrite: true
 
     // -K process INT input bases in each batch regardless of nThreads (for reproducibility)
     script:
@@ -80,25 +69,21 @@ process picard_remove_duplicates {
         tuple val(sample_id), val(sample_type), file(bam_file) from raw_bams
 
     output:
-        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam") into rmdup_bams
+        tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.rmdup.bam"), file("${sample_id}.${sample_type}.rmdup.bai") into rmdup_bams
 
-    cpus 8
-
-    memory "4GB"
-
-    //publishDir params.output, overwrite: true
+    //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
-    java -Xmx${task.memory.toGiga()}g -jar /usr/picard/picard.jar \
+    picard -Xmx${task.memory.toGiga()}g -Djava.io.tmpdir=./ -Dpicard.useLegacyParser=false \
     MarkDuplicates \
-    INPUT=${bam_file} \
-    OUTPUT=${sample_id}.${sample_type}.rmdup.bam \
-    METRICS_FILE=${sample_id}.${sample_type}.quality_metrics \
-    REMOVE_DUPLICATES=true \
-    ASSUME_SORTED=true \
-    VALIDATION_STRINGENCY=SILENT \
-    CREATE_INDEX=true 2> picard_rmdupes.log
+    -INPUT ${bam_file} \
+    -OUTPUT ${sample_id}.${sample_type}.rmdup.bam \
+    -METRICS_FILE ${sample_id}.${sample_type}.quality_metrics \
+    -REMOVE_DUPLICATES true \
+    -ASSUME_SORTED true \
+    -VALIDATION_STRINGENCY SILENT \
+    -CREATE_INDEX true 2> picard_rmdupes.log
     """
 }
 
@@ -109,22 +94,17 @@ process gatk_bqsr {
 
     input:
         path ref_fasta
-        path ref_fasta_fai
-        path ref_fasta_dict
+        path ref_index
         path gatk_mills
         path gatk_mills_index
         path gatk_1kg
         path gatk_1kg_index
-        tuple val(sample_id), val(sample_type), file(bam_file) from rmdup_bams
+        tuple val(sample_id), val(sample_type), file(bam_file), file(bam_bai) from rmdup_bams
 
     output:
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.bqsr.bam") into bqsr_bams
 
-    cpus 8
-
-    memory "4GB"
-
-    //publishDir params.output, overwrite: true
+    //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -157,11 +137,7 @@ process samtools_final_bam {
         tuple val(sample_id), val(sample_type), file("${sample_id}.${sample_type}.final.bam") into final_bams
         file("*.bai")
 
-    cpus 8
-
-    memory "4GB"
-
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -184,11 +160,7 @@ process samtools_mpileup {
     output:
         tuple val(sample_id), file("${sample_id}.${sample_type}.mpileup") into mpileups
 
-    cpus 8
-
-    memory "4GB"
-
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     // -l ${bed_file}
     // -B --no-BAQ
@@ -220,11 +192,7 @@ process sequenza_pileup2seqz {
     output:
         tuple val(sample_id), file("${sample_id}.seqz") into sequenza_seqz
 
-    cpus 8
-
-    //memory "4GB"
-
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -246,11 +214,7 @@ process sequenza_seqz_binning {
     output:
         tuple val(sample_id), file("${sample_id}.binned.seqz.gz") into binned_seqz
 
-    cpus 8
-
-    //memory "4GB"
-
-    //publishDir params.output, overwrite: true
+    //publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
@@ -271,11 +235,7 @@ process sequenza_R {
     output:
         tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.ave_depth.txt"), file("${sample_id}.nitz.copynumber_calls.txt"), file("${sample_id}_genome_view.pdf") into sequenza_R_files
 
-    cpus 8
-
-    //memory "4GB"
-
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     shell:
     '''
@@ -332,7 +292,7 @@ process sequenza_R {
 }
 
 process loh_score {
-    label 'loh_score'
+    label 'sequenza'
 
     tag "${sample_id}"
 
@@ -345,15 +305,11 @@ process loh_score {
     output:
         tuple val(sample_id), file("${sample_id}.nitz.score.txt") into scoring_output
 
-    cpus 8
-
-    //memory "4GB"
-
-    publishDir params.output, overwrite: true
+    publishDir params.output, mode: 'copy', overwrite: true
 
     script:
     """
-    python2 /LOH_score_chr_arms_V4.py ${centromere_file} ${copynumber_calls} ${sample_id}.nitz.score.txt 0.75
+    LOH_score_chr_arms_V4.py ${centromere_file} ${copynumber_calls} ${sample_id}.nitz.score.txt 0.75
     echo "" >> ${sample_id}.nitz.score.txt
     echo -n "Estimated tumor cellularity: " >> ${sample_id}.nitz.score.txt
     cat ${cellularity} >> ${sample_id}.nitz.score.txt

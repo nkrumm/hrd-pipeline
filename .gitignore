@@ -3,3 +3,6 @@ work/
 output/
 .nextflow/
 .DS_Store
+dag.html*
+report.html*
+timeline.html*

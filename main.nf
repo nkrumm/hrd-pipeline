@@ -152,7 +152,6 @@ process samtools_mpileup {
 
     tag "${sample_id}-${sample_type}"
 
-
     input:
         path ref_fasta
         tuple val(sample_id), val(sample_type), file(final_bam) from final_bams
@@ -233,62 +232,27 @@ process sequenza_R {
         tuple val(sample_id), file(binned_seqz_gz) from binned_seqz
 
     output:
-        tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.ave_depth.txt"), file("${sample_id}.nitz.copynumber_calls.txt"), file("${sample_id}_genome_view.pdf") into sequenza_R_files
+        tuple val(sample_id), file("${sample_id}.nitz.cellularity.txt"), file("${sample_id}.nitz.ploidy.txt"), file("${sample_id}.nitz.copynumber_calls.txt") into sequenza_R_files
+        file("${sample_id}_alternative_fit.pdf")
+        file("${sample_id}_alternative_solutions.txt")
+        file("${sample_id}_chromosome_depths.pdf")
+        file("${sample_id}_chromosome_view.pdf")
+        file("${sample_id}_CN_bars.pdf")
+        file("${sample_id}.nitz.cellularity.jpg")
+        file("${sample_id}_model_fit.pdf")
+        file("${sample_id}_confints_CP.txt")
+        file("${sample_id}_CP_contours.pdf")
+        file("${sample_id}_gc_plots.pdf")
+        file("${sample_id}.nitz.ave_depth.txt")
+        file("${sample_id}_genome_view.pdf")
 
     publishDir params.output, mode: 'copy', overwrite: true
 
-    shell:
-    '''
-	#-----------------------------------------------------------------------------------------------
-	#RUN SEQUENZA, R
-	#-----------------------------------------------------------------------------------------------
-	#Create an executable R script, run it and quit it!
-	echo 'library(\"sequenza\")'>!{sample_id}.sequenza.r
-	echo 'data.file <- \"!{binned_seqz_gz}\"' >> !{sample_id}.sequenza.r
-	echo 'seqz.data <- read.seqz(data.file)' >> !{sample_id}.sequenza.r
-	echo 'gc.stats <- gc.sample.stats(data.file)' >> !{sample_id}.sequenza.r
-	echo 'test <- sequenza.extract(data.file)' >> !{sample_id}.sequenza.r
-	echo 'CP.example <- sequenza.fit(test)' >> !{sample_id}.sequenza.r
-	echo 'sequenza.results(sequenza.extract = test, cp.table = CP.example, sample.id = \"!{sample_id}\", out.dir=\"./\")' >> !{sample_id}.sequenza.r
-	echo 'cint <- get.ci(CP.example)' >> !{sample_id}.sequenza.r
-
-	#Plot cellularity
-	echo 'jpeg(\"!{sample_id}.nitz.cellularity.jpg\")' >> !{sample_id}.sequenza.r
-	echo 'cp.plot(CP.example)' >> !{sample_id}.sequenza.r
-	echo 'cp.plot.contours(CP.example, add = TRUE, likThresh=c(0.95))' >> !{sample_id}.sequenza.r
-	echo 'dev.off()' >> !{sample_id}.sequenza.r
-
-	#Call CNVs
-	echo 'cellularity <- cint\$max.cellularity' >> !{sample_id}.sequenza.r
-	echo 'ploidy <- cint\$max.ploidy' >> !{sample_id}.sequenza.r
-    echo 'seg_table <- read.table(\"!{sample_id}_segments.txt\", header = TRUE, sep = \"\\t\", dec = \".\")' >> !{sample_id}.sequenza.r
-	echo 'avg.depth.ratio <- mean(seg_table$depth.ratio)' >> !{sample_id}.sequenza.r
-
-	#Save parameters to file
-	echo 'cellularity' >> !{sample_id}.sequenza.r
-	echo 'write(cellularity, file = \"!{sample_id}.nitz.cellularity.txt\")' >> !{sample_id}.sequenza.r
-	echo 'write(ploidy, file = \"!{sample_id}.nitz.ploidy.txt\")' >>!{sample_id}.sequenza.r
-	echo 'write(avg.depth.ratio, file = \"!{sample_id}.nitz.ave_depth.txt\")' >> !{sample_id}.sequenza.r
-
-	#Detect variant alleles
-	echo 'mut.tab <- na.exclude(do.call(rbind, test\$mutations))' >> !{sample_id}.sequenza.r
-	echo 'mut.alleles <- mufreq.bayes(mufreq = mut.tab\$F, depth.ratio = mut.tab\$adjusted.ratio, cellularity = cellularity, ploidy = ploidy, avg.depth.ratio = avg.depth.ratio)' >> !{sample_id}.sequenza.r
-
-	#Detect CN variation
-	echo 'seg.tab <- na.exclude(do.call(rbind, test\$segments))' >> !{sample_id}.sequenza.r
-	echo 'cn.alleles <- baf.bayes(Bf = seg.tab\$Bf, depth.ratio = seg.tab\$depth.ratio, cellularity = cellularity, ploidy = ploidy, avg.depth.ratio = avg.depth.ratio)' >> !{sample_id}.sequenza.r
-	echo 'seg.tab <- cbind(seg.tab, cn.alleles)' >>!{sample_id}.sequenza.r
-	echo 'seg.tab' >> !{sample_id}.sequenza.r
-
-	#write sequenza matrix to file, this will serve as input to loss score script's 2nd arg
-	echo 'write.table(seg.tab, file = \"!{sample_id}.nitz.copynumber_calls.txt\", append = FALSE)' >> !{sample_id}.sequenza.r
-	#exit
-	echo 'q()' >> !{sample_id}.sequenza.r
-	echo 'n' >> !{sample_id}.sequenza.r
-
+    script:
+    """
 	#execute the R script
-	R --vanilla < !{sample_id}.sequenza.r
-    '''
+	sample_sequenza.r ${sample_id} ${binned_seqz_gz}
+    """
 }
 
 process loh_score {
@@ -300,7 +264,7 @@ process loh_score {
 
     input:
         path centromere_file
-        tuple val(sample_id), file(cellularity), file(ploidy), file(ave_depth), file(copynumber_calls), file(genome_pdf) from sequenza_R_files
+        tuple val(sample_id), file(cellularity), file(ploidy), file(copynumber_calls) from sequenza_R_files
 
     output:
         tuple val(sample_id), file("${sample_id}.nitz.score.txt") into scoring_output

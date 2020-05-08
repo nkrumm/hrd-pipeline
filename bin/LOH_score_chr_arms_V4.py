@@ -36,10 +36,11 @@ def centromereInfo(input_file):
     with open(input_file, "r+") as centromere_file:
         header = centromere_file.readline()
         for line in centromere_file:
-            chrom = line.split("\t")[1].replace("chr","")
-            centromere_start = (line.split("\t")[2])
-            centromere_end = (line.split("\t")[3])
-            centromere_info[chrom] = [centromere_start, centromere_end]
+            if "centromere" in line:
+                chrom = line.split("\t")[1].replace("chr","")
+                centromere_start = (line.split("\t")[2])
+                centromere_end = (line.split("\t")[3])
+                centromere_info[chrom] = [centromere_start, centromere_end]
     print centromere_info
 
 

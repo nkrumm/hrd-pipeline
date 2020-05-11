@@ -20,15 +20,11 @@ gatk_1kg_index = file(params.genomes[params.genome].gatk_1kg_index, checkIfExist
 // Read in command line input files
 gc_window = file(params.gc_window, checkIfExists: true)
 centromere_file = file(params.centromere, checkIfExists: true)
-Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
+fastqs = Channel.fromFilePairs(params.normal + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
                        .map { tuple( it[0], "normal", it[1], it[2] ) }
-                       .set {normal_samples}
-
-Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
-                       .map { tuple( it[0], "tumor", it[1], it[2] ) }
-                       .set {tumor_samples}
-
-fastqs = normal_samples.mix(tumor_samples)
+                       .mix(
+         Channel.fromFilePairs(params.tumor + '/*{1,2}.fastq.gz', flat: true, checkIfExists: true)
+                       .map { tuple( it[0], "tumor", it[1], it[2] ) })
 
 
 process alignment {
